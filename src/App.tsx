@@ -1,6 +1,5 @@
 
 import { useEffect, useMemo, useState } from 'react'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { OperationForm } from '@/components/OperationForm'
 import { OperationsTable } from '@/components/OperationsTable'
@@ -12,6 +11,9 @@ import { TestRunner } from '@/components/TestRunner'
 import { computeKPIs } from '@/utils/roi'
 import { Operacion } from '@/types'
 import { addOperacion, deleteOperacion, listenOperaciones, updateOperacion } from '@/services.firestore'
+// src/App.tsx
+import Dashboard from "./pages/Dashboard";
+import { Button } from "@/components/ui/button";
 
 const sampleOps: Operacion[] = [
   { fechaInicio: '2025-01-01', fechaVencimiento: '2025-01-17', fechaCierre: '2025-01-10', ticker: 'INTC', estrategia: 'CSP', acciones: 100, strike: 22, primaRecibida: 35, comision: 1.3, costoCierre: 5, estado: 'Cerrada', precioCierre: 0, notas: 'Cierre 80%' },
