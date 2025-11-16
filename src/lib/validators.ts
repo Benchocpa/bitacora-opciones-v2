@@ -1,16 +1,15 @@
 // src/lib/validators.ts
-import { Trade } from './roi';
+import type { Operacion } from "@/types"
 
-export function validateTrade(t: Trade): string[] {
-  const errors: string[] = [];
-  if (!t.fecha_inicio) errors.push('fecha_inicio es requerida');
-  if (!t.fecha_vencimiento) errors.push('fecha_vencimiento es requerida');
-  if (!t.ticker) errors.push('ticker es requerido');
-  if (!t.estrategia) errors.push('estrategia es requerida');
-  if (!t.estado) errors.push('estado es requerido');
-  if (t.acciones <= 0) errors.push('acciones debe ser > 0');
-  if (t.strike < 0) errors.push('strike no puede ser negativo');
-  if (t.comision < 0) errors.push('comision no puede ser negativa');
-  if (t.costo_cierre < 0) errors.push('costo_cierre no puede ser negativo');
-  return errors;
+export function validateTrade(op: Operacion): string | null {
+  if (!op.ticker) return "El ticker es obligatorio"
+  if (!op.estrategia) return "La estrategia es obligatoria"
+  if (!op.fechaInicio) return "La fecha de inicio es obligatoria"
+  if (!op.fechaVencimiento) return "La fecha de vencimiento es obligatoria"
+  if ((op.acciones ?? 0) <= 0) return "Las acciones deben ser > 0"
+  if ((op.strike ?? 0) <= 0) return "El strike debe ser > 0"
+  if ((op.primaRecibida ?? 0) < 0) return "La prima recibida no puede ser negativa"
+  if ((op.comision ?? 0) < 0) return "La comisión no puede ser negativa"
+  if ((op.costoCierre ?? 0) < 0) return "El costo de cierre no puede ser negativo"
+  return null
 }

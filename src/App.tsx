@@ -1,88 +1,731 @@
+import { useEffect, useMemo, useState, FormEvent } from "react"
+import { supabase } from "./supabaseClient"
 
-import { useEffect, useMemo, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { OperationForm } from '@/components/OperationForm'
-import { OperationsTable } from '@/components/OperationsTable'
-import { StatsCards } from '@/components/StatsCards'
-import { CsvControls } from '@/components/CsvControls'
-import { RoiRanking } from '@/components/RoiRanking'
-import { RoiBarChart } from '@/components/RoiBarChart'
-import { TestRunner } from '@/components/TestRunner'
-import { computeKPIs } from '@/utils/roi'
-import { Operacion } from '@/types'
-import { addOperacion, deleteOperacion, listenOperaciones, updateOperacion } from '@/services.firestore'
-// src/App.tsx
-import Dashboard from "./pages/Dashboard";
-import { Button } from "@/components/ui/button";
+// Tipo de cómo viene desde la BD (snake_case)
+type DbOperacion = {
+  id: number
+  fecha_inicio: string
+  fecha_vencimiento: string | null
+  fecha_cierre: string | null
+  ticker: string
+  estrategia: string
+  acciones: number | null
+  strike: number | null
+  prima_recibida: number | null
+  comision: number | null
+  costo_cierre: number | null
+}
 
-const sampleOps: Operacion[] = [
-  { fechaInicio: '2025-01-01', fechaVencimiento: '2025-01-17', fechaCierre: '2025-01-10', ticker: 'INTC', estrategia: 'CSP', acciones: 100, strike: 22, primaRecibida: 35, comision: 1.3, costoCierre: 5, estado: 'Cerrada', precioCierre: 0, notas: 'Cierre 80%' },
-  { fechaInicio: '2025-02-01', fechaVencimiento: '2025-02-21', fechaCierre: '2025-02-18', ticker: 'CLSK', estrategia: 'CSP', acciones: 100, strike: 5, primaRecibida: 18, comision: 1.3, costoCierre: 0, estado: 'Vencida', precioCierre: 0, notas: '' },
-  { fechaInicio: '2025-02-15', fechaVencimiento: '2025-03-21', fechaCierre: '2025-03-20', ticker: 'INTC', estrategia: 'CC', acciones: 100, strike: 37, primaRecibida: 22, comision: 1.3, costoCierre: 0, estado: 'Cerrada', precioCierre: 0, notas: '' },
-]
+// Tipo que usamos en la app (camelCase)
+type Operacion = {
+  id: number
+  fechaInicio: string
+  fechaVencimiento: string | null
+  fechaCierre: string | null
+  ticker: string
+  estrategia: string
+  acciones: number
+  strike: number
+  primaRecibida: number
+  comision: number
+  costoCierre: number
+}
 
-export default function App() {
-  const [ops, setOps] = useState<Operacion[]>([])
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<Operacion | null>(null)
-  const [testMsg, setTestMsg] = useState('')
+type FormState = {
+  fechaInicio: string
+  fechaVencimiento: string
+  fechaCierre: string
+  ticker: string
+  estrategia: string
+  acciones: string
+  strike: string
+  primaRecibida: string
+  comision: string
+  costoCierre: string
+}
 
+const emptyForm: FormState = {
+  fechaInicio: "",
+  fechaVencimiento: "",
+  fechaCierre: "",
+  ticker: "",
+  estrategia: "",
+  acciones: "",
+  strike: "",
+  primaRecibida: "",
+  comision: "",
+  costoCierre: "",
+}
+
+// helper BD → app
+function mapDbToOperacion(row: DbOperacion): Operacion {
+  return {
+    id: row.id,
+    fechaInicio: row.fecha_inicio,
+    fechaVencimiento: row.fecha_vencimiento,
+    fechaCierre: row.fecha_cierre,
+    ticker: row.ticker,
+    estrategia: row.estrategia,
+    acciones: row.acciones ?? 0,
+    strike: row.strike ?? 0,
+    primaRecibida: row.prima_recibida ?? 0,
+    comision: row.comision ?? 0,
+    costoCierre: row.costo_cierre ?? 0,
+  }
+}
+
+type TickerStats = {
+  ticker: string
+  prima: number
+  costos: number
+  neto: number
+  capitalInv: number
+  roi: number
+  operaciones: number
+  accionesTotales: number
+  breakEven: number
+}
+
+
+function App() {
+  const [operaciones, setOperaciones] = useState<Operacion[]>([])
+  const [form, setForm] = useState<FormState>(emptyForm)
+  const [isFormOpen, setIsFormOpen] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadingPage, setLoadingPage] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Cargar operaciones desde Supabase
   useEffect(() => {
-    const unsub = listenOperaciones((arr) => setOps(arr))
-    return () => unsub()
+    const fetchOps = async () => {
+      setLoadingPage(true)
+      setErrorMsg(null)
+
+      const { data, error } = await supabase
+        .from("operaciones")
+        .select("*")
+        .order("fecha_inicio", { ascending: false })
+
+      if (error) {
+        console.error("Error al cargar operaciones:", error)
+        const msg =
+          (error as any)?.message ||
+          (error as any)?.error_description ||
+          "No se pudieron cargar las operaciones."
+        setErrorMsg(msg)
+      } else if (data) {
+        setOperaciones((data as DbOperacion[]).map(mapDbToOperacion))
+      }
+
+      setLoadingPage(false)
+    }
+
+    fetchOps()
   }, [])
 
-  const kpi = useMemo(() => computeKPIs(ops), [ops])
-
-  async function handleSubmit(op: Operacion) {
-    if (editing && editing.id) {
-      await updateOperacion(editing.id, op)
-    } else {
-      await addOperacion(op)
+  // KPIs generales
+  const stats = useMemo(() => {
+    if (operaciones.length === 0) {
+      return {
+        prima: 0,
+        costos: 0,
+        neto: 0,
+        capitalInv: 0,
+        roi: 0,
+        cantidad: 0,
+      }
     }
-    setOpen(false); setEditing(null)
+
+    const prima = operaciones.reduce(
+      (acc, op) => acc + (op.primaRecibida || 0),
+      0
+    )
+
+    const costos = operaciones.reduce(
+      (acc, op) => acc + (op.comision || 0) + (op.costoCierre || 0),
+      0
+    )
+
+    const neto = prima - costos
+
+    const capitalInv = operaciones.reduce(
+      (acc, op) => acc + (op.acciones || 0) * (op.strike || 0),
+      0
+    )
+
+    const roi = capitalInv > 0 ? (neto / capitalInv) * 100 : 0
+
+    return {
+      prima,
+      costos,
+      neto,
+      capitalInv,
+      roi,
+      cantidad: operaciones.length,
+    }
+  }, [operaciones])
+
+  // 🔥 ROI POR TICKER
+  const roiPorTicker: TickerStats[] = useMemo(() => {
+    if (operaciones.length === 0) return []
+
+    const map = new Map<string, TickerStats>()
+
+    for (const op of operaciones) {
+      const key = op.ticker.toUpperCase()
+
+      if (!map.has(key)) {
+        map.set(key, {
+          ticker: key,
+          prima: 0,
+          costos: 0,
+          neto: 0,
+          capitalInv: 0,
+          roi: 0,
+          operaciones: 0,
+          accionesTotales: 0,
+          breakEven: 0,
+        })
+      }
+
+      const item = map.get(key)!
+      const prima = op.primaRecibida || 0
+      const costos = (op.comision || 0) + (op.costoCierre || 0)
+      const capital = (op.acciones || 0) * (op.strike || 0)
+      const acciones = op.acciones || 0
+
+      item.prima += prima
+      item.costos += costos
+      item.capitalInv += capital
+      item.operaciones += 1
+      item.accionesTotales += acciones
+      item.neto = item.prima - item.costos
+    }
+
+    const arr = Array.from(map.values()).map((item) => {
+      const roi =
+        item.capitalInv > 0 ? (item.neto / item.capitalInv) * 100 : 0
+
+      const breakEven =
+        item.accionesTotales > 0
+          ? (item.capitalInv - item.neto) / item.accionesTotales
+          : 0
+
+      return { ...item, roi, breakEven }
+    })
+
+    // ordenado por ROI desc (puedes cambiar a neto si quieres)
+    arr.sort((a, b) => b.roi - a.roi)
+
+    return arr
+  }, [operaciones])
+
+  const openNewForm = () => {
+    setEditingId(null)
+    setForm(emptyForm)
+    setIsFormOpen(true)
+  }
+
+  const openEditForm = (op: Operacion) => {
+    setEditingId(op.id)
+    setForm({
+      fechaInicio: op.fechaInicio ?? "",
+      fechaVencimiento: op.fechaVencimiento ?? "",
+      fechaCierre: op.fechaCierre ?? "",
+      ticker: op.ticker,
+      estrategia: op.estrategia,
+      acciones: String(op.acciones || ""),
+      strike: String(op.strike || ""),
+      primaRecibida: String(op.primaRecibida || ""),
+      comision: String(op.comision || ""),
+      costoCierre: String(op.costoCierre || ""),
+    })
+    setIsFormOpen(true)
+  }
+
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target
+    setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setErrorMsg(null)
+
+    if (!form.ticker || !form.fechaInicio || !form.estrategia) {
+      alert("Faltan campos obligatorios (ticker, fecha de inicio, estrategia).")
+      setLoading(false)
+      return
+    }
+
+    const payload = {
+      fecha_inicio: form.fechaInicio,
+      fecha_vencimiento: form.fechaVencimiento || null,
+      fecha_cierre: form.fechaCierre || null,
+      ticker: form.ticker.toUpperCase(),
+      estrategia: form.estrategia,
+      acciones: Number(form.acciones || 0),
+      strike: Number(form.strike || 0),
+      prima_recibida: Number(form.primaRecibida || 0),
+      comision: Number(form.comision || 0),
+      costo_cierre: Number(form.costoCierre || 0),
+    }
+
+    try {
+      if (editingId == null) {
+        const { data, error } = await supabase
+          .from("operaciones")
+          .insert(payload)
+          .select()
+          .single()
+
+        if (error) throw error
+
+        setOperaciones((prev) => [
+          mapDbToOperacion(data as DbOperacion),
+          ...prev,
+        ])
+      } else {
+        const { data, error } = await supabase
+          .from("operaciones")
+          .update(payload)
+          .eq("id", editingId)
+          .select()
+          .single()
+
+        if (error) throw error
+
+        setOperaciones((prev) =>
+          prev.map((op) =>
+            op.id === editingId ? mapDbToOperacion(data as DbOperacion) : op
+          )
+        )
+      }
+
+      setIsFormOpen(false)
+      setEditingId(null)
+      setForm(emptyForm)
+    } catch (err: any) {
+      console.error("Error al guardar operación:", err)
+      const msg =
+        err?.message ||
+        err?.error_description ||
+        "No se pudo guardar la operación."
+      setErrorMsg(msg)
+      alert(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("¿Seguro que quieres eliminar esta operación?")) return
+    setLoading(true)
+    setErrorMsg(null)
+
+    try {
+      const { error } = await supabase.from("operaciones").delete().eq("id", id)
+
+      if (error) throw error
+
+      setOperaciones((prev) => prev.filter((op) => op.id !== id))
+    } catch (err: any) {
+      console.error("Error al eliminar operación:", err)
+      const msg =
+        err?.message ||
+        err?.error_description ||
+        "No se pudo eliminar la operación."
+      setErrorMsg(msg)
+      alert(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Bitácora de Opciones</h1>
-          <p className="text-muted-foreground">Registra, sincroniza y analiza tus operaciones con ROI general y por ticker.</p>
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b bg-white">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
+          <h1 className="text-2xl font-semibold">Bitácora de Opciones V2</h1>
+          <button
+            onClick={openNewForm}
+            className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Nueva operación
+          </button>
         </div>
-        <div className="flex items-center gap-2">
-          <CsvControls ops={ops} onImport={async (arr) => {
-            // bulk add
-            for (const o of arr) await addOperacion(o)
-          }} />
-          <TestRunner onResult={setTestMsg} sample={sampleOps} />
-          <Button onClick={() => { setEditing(null); setOpen(true) }}>Nueva Operación</Button>
+      </header>
+
+      <main className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+        {loadingPage && (
+          <p className="text-sm text-slate-500">Cargando operaciones…</p>
+        )}
+        {errorMsg && (
+          <p className="text-sm text-red-600">{errorMsg}</p>
+        )}
+
+        {/* KPIs generales */}
+        <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-3">
+          <Card title="Prima" value={stats.prima} />
+          <Card title="Costos" value={stats.costos} />
+          <Card title="Neto" value={stats.neto} />
+          <Card title="ROI General" value={stats.roi} isPercentage />
+          <Card title="Operaciones" value={stats.cantidad} decimals={0} />
+          <Card title="Capital Inv." value={stats.capitalInv} />
         </div>
-      </div>
 
-      {testMsg && <div className="rounded-2xl border p-3">{testMsg}</div>}
+        {/* 🔥 ROI POR TICKER */}
+        <section className="rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-lg font-semibold">ROI por ticker</h2>
 
-      <StatsCards kpi={kpi} />
+          {roiPorTicker.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Aún no hay datos suficientes para calcular ROI por ticker.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-slate-50 text-left text-xs uppercase text-slate-500">
+                    <th className="px-2 py-2">Ticker</th>
+                    <th className="px-2 py-2 text-right">Operaciones</th>
+                    <th className="px-2 py-2 text-right">Prima</th>
+                    <th className="px-2 py-2 text-right">Costos</th>
+                    <th className="px-2 py-2 text-right">Neto</th>
+                    <th className="px-2 py-2 text-right">Capital Inv.</th>
+                    <th className="px-2 py-2 text-right">Break-even</th>
+                    <th className="px-2 py-2 text-right">ROI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roiPorTicker.map((item) => (
+                    <tr
+                      key={item.ticker}
+                      className="border-b last:border-0 hover:bg-slate-50"
+                    >
+                      <td className="px-2 py-2 font-medium">
+                        {item.ticker}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.operaciones}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.prima.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.costos.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.neto.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.capitalInv.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {item.breakEven.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                         {item.roi.toFixed(2)}%
+                      </td>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Operaciones</CardTitle></CardHeader>
-          <CardContent>
-            <OperationsTable
-              ops={ops}
-              onEdit={(op) => { setEditing(op); setOpen(true) }}
-              onDelete={async (id) => await deleteOperacion(id)}
-            />
-          </CardContent>
-        </Card>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
-        <div className="space-y-6">
-          <RoiRanking ops={ops} />
-          <RoiBarChart ops={ops} />
-        </div>
-      </div>
+        {/* Tabla de operaciones */}
+        <section className="rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-lg font-semibold">
+            Operaciones registradas
+          </h2>
 
-      <OperationForm open={open} onClose={() => { setOpen(false); setEditing(null) }} onSubmit={handleSubmit} initial={editing} />
+          {operaciones.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Aún no tienes operaciones en la base de datos. Haz clic en{" "}
+              <span className="font-semibold">“Nueva operación”</span> para
+              registrar la primera.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-slate-50 text-left text-xs uppercase text-slate-500">
+                    <th className="px-2 py-2">Ticker</th>
+                    <th className="px-2 py-2">Estrategia</th>
+                    <th className="px-2 py-2">F. Inicio</th>
+                    <th className="px-2 py-2">F. Venc.</th>
+                    <th className="px-2 py-2 text-right">Acciones</th>
+                    <th className="px-2 py-2 text-right">Strike</th>
+                    <th className="px-2 py-2 text-right">Prima</th>
+                    <th className="px-2 py-2 text-right">Comisión</th>
+                    <th className="px-2 py-2 text-right">Costo cierre</th>
+                    <th className="px-2 py-2">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {operaciones.map((op) => (
+                    <tr
+                      key={op.id}
+                      className="border-b last:border-0 hover:bg-slate-50"
+                    >
+                      <td className="px-2 py-2 font-medium">
+                        {op.ticker}
+                      </td>
+                      <td className="px-2 py-2">{op.estrategia}</td>
+                      <td className="px-2 py-2">{op.fechaInicio}</td>
+                      <td className="px-2 py-2">
+                        {op.fechaVencimiento}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {op.acciones}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {op.strike.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {op.primaRecibida.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {op.comision.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {op.costoCierre.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-2">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => openEditForm(op)}
+                            className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => handleDelete(op.id)}
+                            className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Modal formulario */}
+        {isFormOpen && (
+          <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-lg">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">
+                  {editingId ? "Editar operación" : "Nueva operación"}
+                </h2>
+                <button
+                  onClick={() => {
+                    setIsFormOpen(false)
+                    setEditingId(null)
+                    setForm(emptyForm)
+                  }}
+                  className="text-sm text-slate-500 hover:text-slate-800"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form
+                onSubmit={handleSubmit}
+                className="grid grid-cols-1 gap-3 md:grid-cols-2"
+              >
+                <InputField
+                  label="Fecha inicio"
+                  type="date"
+                  name="fechaInicio"
+                  value={form.fechaInicio}
+                  onChange={handleChange}
+                  required
+                />
+                <InputField
+                  label="Fecha vencimiento"
+                  type="date"
+                  name="fechaVencimiento"
+                  value={form.fechaVencimiento}
+                  onChange={handleChange}
+                />
+                <InputField
+                  label="Fecha cierre"
+                  type="date"
+                  name="fechaCierre"
+                  value={form.fechaCierre}
+                  onChange={handleChange}
+                />
+                <InputField
+                  label="Ticker"
+                  type="text"
+                  name="ticker"
+                  value={form.ticker}
+                  onChange={handleChange}
+                  placeholder="INTC, CLSK, etc."
+                  required
+                />
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium">Estrategia</label>
+                  <select
+                    name="estrategia"
+                    value={form.estrategia}
+                    onChange={handleChange}
+                    className="rounded-md border px-2 py-1 text-sm"
+                    required
+                  >
+                    <option value="">Selecciona…</option>
+                    <option value="CSP">Cash Secured Put</option>
+                    <option value="CC">Covered Call</option>
+                    <option value="Spread">Spread</option>
+                    <option value="Iron Condor">Iron Condor</option>
+                    <option value="Otra">Otra</option>
+                  </select>
+                </div>
+
+                <InputField
+                  label="Acciones"
+                  type="number"
+                  name="acciones"
+                  value={form.acciones}
+                  onChange={handleChange}
+                />
+                <InputField
+                  label="Strike"
+                  type="number"
+                  name="strike"
+                  value={form.strike}
+                  onChange={handleChange}
+                  step="0.01"
+                />
+                <InputField
+                  label="Prima recibida"
+                  type="number"
+                  name="primaRecibida"
+                  value={form.primaRecibida}
+                  onChange={handleChange}
+                  step="0.01"
+                />
+                <InputField
+                  label="Comisión"
+                  type="number"
+                  name="comision"
+                  value={form.comision}
+                  onChange={handleChange}
+                  step="0.01"
+                />
+                <InputField
+                  label="Costo de cierre"
+                  type="number"
+                  name="costoCierre"
+                  value={form.costoCierre}
+                  onChange={handleChange}
+                  step="0.01"
+                />
+
+                <div className="col-span-1 mt-3 flex justify-end gap-2 md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsFormOpen(false)
+                      setEditingId(null)
+                      setForm(emptyForm)
+                    }}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm hover:bg-slate-100"
+                    disabled={loading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+                    disabled={loading}
+                  >
+                    {loading ? "Guardando..." : "Guardar"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </main>
     </div>
   )
 }
+
+type CardProps = {
+  title: string
+  value: number
+  isPercentage?: boolean
+  decimals?: number
+}
+
+function Card({ title, value, isPercentage, decimals = 2 }: CardProps) {
+  const formatted = isPercentage
+    ? `${value.toFixed(2)}%`
+    : value.toFixed(decimals)
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p className="text-sm text-slate-500">{title}</p>
+      <p className="mt-2 text-2xl font-semibold text-slate-900">
+        {formatted}
+      </p>
+    </div>
+  )
+}
+
+type InputFieldProps = {
+  label: string
+  name: string
+  value: string
+  type?: string
+  step?: string
+  placeholder?: string
+  required?: boolean
+  onChange: (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => void
+}
+
+function InputField({
+  label,
+  name,
+  value,
+  type = "text",
+  step,
+  placeholder,
+  required,
+  onChange,
+}: InputFieldProps) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-medium">{label}</label>
+      <input
+        type={type}
+        name={name}
+        value={value}
+        onChange={onChange}
+        step={step}
+        placeholder={placeholder}
+        required={required}
+        className="rounded-md border px-2 py-1 text-sm"
+      />
+    </div>
+  )
+}
+
+export default App

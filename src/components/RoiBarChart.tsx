@@ -1,17 +1,24 @@
-// src/components/RoiBarChart.tsx
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import React from "react"
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
+import { computeRoiPorTicker } from "@/utils/roi"
+import type { Operacion } from "@/types"
 
-export function RoiBarChart({ data }: { data: { ticker: string; roi: number }[] }) {
+type Props = { ops: Operacion[] }
+
+export default function RoiBarChart({ ops }: Props) {
+  const data = computeRoiPorTicker(ops)
+
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer>
+    <div className="p-4 border rounded-lg h-64">
+      <h3 className="font-semibold mb-2">ROI por Ticker</h3>
+      <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data}>
           <XAxis dataKey="ticker" />
           <YAxis />
           <Tooltip />
-          <Bar dataKey="roi" fill="#0ea5e9" />
+          <Bar dataKey="roi" fill="#4f46e5" />
         </BarChart>
       </ResponsiveContainer>
     </div>
-  );
+  )
 }

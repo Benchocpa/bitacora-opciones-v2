@@ -1,45 +1,44 @@
+// src/utils/roi.ts
+import type { Operacion } from "@/types"
 
-import { Operacion, KPI } from '@/types'
-
-export function capital(op: Operacion) {
-  return op.acciones * op.strike
+// Tipo para agrupar todos los KPI del sistema
+export type KPIs = {
+  sumaPrimas: number
+  totalCostos: number
+  gananciaNeta: number
+  roiGeneral: number
+  totalOperaciones: number
+  capitalInvertido: number
 }
 
-export function gananciaNeta(op: Operacion) {
-  // prima recibida - costos (comision + costoCierre). If assigned/closed, precioCierre isn't used here.
-  return op.primaRecibida - (op.comision + op.costoCierre)
+// ROI de una sola operación
+export function computeRoiOperacion(op: Operacion): number {
+  const capital = op.acciones * op.strike
+  const costos = (op.comision || 0) + (op.costoCierre || 0)
+  const ganancia = (op.primaRecibida || 0) - costos
+  if (!capital || capital === 0) return 0
+  return (ganancia / capital) * 100
 }
 
-export function roiOperacion(op: Operacion) {
-  const cap = capital(op)
-  const neto = gananciaNeta(op)
-  return cap > 0 ? (neto / cap) * 100 : 0
+// ROI general (promedio de todas las operaciones)
+export function computeRoiGeneral(ops: Operacion[]): number {
+  const totalCapital = ops.reduce((sum, o) => sum + o.acciones * o.strike, 0)
+  const totalGanancia = ops.reduce(
+    (sum, o) => sum + ((o.primaRecibida || 0) - ((o.comision || 0) + (o.costoCierre || 0))),
+    0
+  )
+  if (!totalCapital || totalCapital === 0) return 0
+  return (totalGanancia / totalCapital) * 100
 }
 
-export function computeKPIs(ops: Operacion[]): KPI {
-  const totalOps = ops.length
-  const primas = sum(ops.map(o => o.primaRecibida))
-  const costos = sum(ops.map(o => o.comision + o.costoCierre))
-  const neto = primas - costos
-  const capTotal = sum(ops.map(capital))
-  const roiGeneral = capTotal > 0 ? (neto / capTotal) * 100 : 0
-  return { primas, costos, neto, totalOps, roiGeneral }
-}
+// Cálculo de KPIs globales
+export function computeKPIs(ops: Operacion[]): KPIs {
+  const sumaPrimas = ops.reduce((sum, o) => sum + (o.primaRecibida || 0), 0)
+  const totalCostos = ops.reduce((sum, o) => sum + ((o.comision || 0) + (o.costoCierre || 0)), 0)
+  const gananciaNeta = sumaPrimas - totalCostos
+  const roiGeneral = computeRoiGeneral(ops)
+  const totalOperaciones = ops.length
+  const capitalInvertido = ops.reduce((sum, o) => sum + (o.acciones * o.strike), 0)
 
-export function roiPorTicker(ops: Operacion[]): { ticker: string, roi: number, neto: number, capital: number }[] {
-  const by = new Map<string, Operacion[]>()
-  for (const op of ops) {
-    const t = op.ticker.toUpperCase()
-    by.set(t, [...(by.get(t) || []), op])
-  }
-  const rows = Array.from(by.entries()).map(([ticker, arr]) => {
-    const cap = sum(arr.map(capital))
-    const neto = sum(arr.map(gananciaNeta))
-    const roi = cap > 0 ? (neto / cap) * 100 : 0
-    return { ticker, roi, neto, capital: cap }
-  })
-  rows.sort((a, b) => b.roi - a.roi)
-  return rows
+  return { sumaPrimas, totalCostos, gananciaNeta, roiGeneral, totalOperaciones, capitalInvertido }
 }
-
-export function sum(nums: number[]) { return nums.reduce((a, b) => a + b, 0) }

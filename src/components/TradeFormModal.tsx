@@ -1,140 +1,132 @@
 // src/components/TradeFormModal.tsx
-import { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { supabase } from '@/lib/supabase';
-import { Trade } from '@/lib/roi';
-import { validateTrade } from '@/lib/validators';
+import React, { useEffect, useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import Button from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import type { Operacion } from "@/types"
+import { addOperacion, updateOperacion } from "@/services"
+import { validateTrade } from "@/lib/validators"
 
 type Props = {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  initial?: Trade | null;
-};
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  initial?: Operacion | null
+}
 
-const empty: Trade = {
-  fecha_inicio: '',
-  fecha_vencimiento: '',
-  fecha_cierre: '',
-  ticker: '',
-  estrategia: '',
-  acciones: 100,
-  strike: 0,
-  prima_recibida: 0,
-  comision: 0,
-  costo_cierre: 0,
-  estado: 'abierta',
-  precio_cierre: null,
-  notas: ''
-};
-
-export function TradeFormModal({ open, onOpenChange, initial }: Props) {
-  const [form, setForm] = useState<Trade>(initial || empty);
-  const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
-
-  useEffect(() => { setForm(initial || empty); setErrors([]); }, [initial, open]);
-
-  function set<K extends keyof Trade>(key: K, val: Trade[K]) {
-    setForm(prev => ({ ...prev, [key]: val }));
-  }
-
-  async function onSubmit() {
-    const errs = validateTrade(form);
-    setErrors(errs);
-    if (errs.length) return;
-    setLoading(true);
-    if ((initial as any)?.id) {
-      await supabase.from('trades').update(form).eq('id', (initial as any).id);
-    } else {
-      await supabase.from('trades').insert(form);
+export default function TradeFormModal({ open, onOpenChange, initial }: Props) {
+  const [form, setForm] = useState<Operacion>(
+    initial ?? {
+      fechaInicio: "",
+      fechaVencimiento: "",
+      fechaCierre: "",
+      ticker: "",
+      estrategia: "",
+      acciones: 0,
+      strike: 0,
+      primaRecibida: 0,
+      comision: 0,
+      costoCierre: 0,
+      estado: "abierta",
+      precioCierre: 0,
+      notas: "",
     }
-    setLoading(false);
-    onOpenChange(false);
+  )
+
+  useEffect(() => {
+    if (initial) setForm(initial)
+  }, [initial])
+
+  const onChange =
+    (k: keyof Operacion) =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.value
+      // numéricos
+      const numericKeys: Array<keyof Operacion> = [
+        "acciones",
+        "strike",
+        "primaRecibida",
+        "comision",
+        "costoCierre",
+        "precioCierre",
+      ]
+      setForm((f) => ({
+        ...f,
+        [k]: numericKeys.includes(k) ? Number(v || 0) : v,
+      }))
+    }
+
+  const onSubmit = async () => {
+    const err = validateTrade?.(form)
+    if (err) {
+      alert(err)
+      return
+    }
+    if ((form as any).id) {
+      await updateOperacion((form as any).id, form)
+    } else {
+      await addOperacion(form)
+    }
+    onOpenChange(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle>{initial ? 'Editar operación' : 'Nueva operación'}</DialogTitle>
+          <DialogTitle>{(form as any).id ? "Editar operación" : "Nueva operación"}</DialogTitle>
         </DialogHeader>
 
-        {errors.length > 0 && (
-          <div className="text-red-600 text-sm space-y-1">
-            {errors.map(e => <div key={e}>• {e}</div>)}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Fechas */}
-          <div>
-            <Label>Fecha inicio</Label>
-            <Input type="date" value={form.fecha_inicio} onChange={e => set('fecha_inicio', e.target.value)} />
-          </div>
-          <div>
-            <Label>Fecha vencimiento</Label>
-            <Input type="date" value={form.fecha_vencimiento} onChange={e => set('fecha_vencimiento', e.target.value)} />
-          </div>
-          <div>
-            <Label>Fecha cierre</Label>
-            <Input type="date" value={form.fecha_cierre || ''} onChange={e => set('fecha_cierre', e.target.value)} />
-          </div>
-
-          {/* Ticker, estrategia */}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
             <Label>Ticker</Label>
-            <Input value={form.ticker} onChange={e => set('ticker', e.target.value.toUpperCase())} />
+            <Input value={form.ticker} onChange={onChange("ticker")} placeholder="INTC" />
           </div>
           <div>
             <Label>Estrategia</Label>
-            <Input value={form.estrategia} onChange={e => set('estrategia', e.target.value)} />
+            <Input value={form.estrategia} onChange={onChange("estrategia")} placeholder="CSP / CC" />
           </div>
-
-          {/* Números */}
+          <div>
+            <Label>Fecha inicio</Label>
+            <Input type="date" value={form.fechaInicio} onChange={onChange("fechaInicio")} />
+          </div>
+          <div>
+            <Label>Vencimiento</Label>
+            <Input type="date" value={form.fechaVencimiento} onChange={onChange("fechaVencimiento")} />
+          </div>
           <div>
             <Label>Acciones</Label>
-            <Input type="number" value={form.acciones} onChange={e => set('acciones', Number(e.target.value))} />
+            <Input type="number" value={form.acciones} onChange={onChange("acciones")} />
           </div>
           <div>
             <Label>Strike</Label>
-            <Input type="number" step="0.01" value={form.strike} onChange={e => set('strike', Number(e.target.value))} />
+            <Input type="number" value={form.strike} onChange={onChange("strike")} />
           </div>
           <div>
             <Label>Prima recibida</Label>
-            <Input type="number" step="0.01" value={form.prima_recibida} onChange={e => set('prima_recibida', Number(e.target.value))} />
+            <Input type="number" value={form.primaRecibida} onChange={onChange("primaRecibida")} />
           </div>
           <div>
             <Label>Comisión</Label>
-            <Input type="number" step="0.01" value={form.comision} onChange={e => set('comision', Number(e.target.value))} />
+            <Input type="number" value={form.comision} onChange={onChange("comision")} />
           </div>
           <div>
-            <Label>Costo cierre</Label>
-            <Input type="number" step="0.01" value={form.costo_cierre} onChange={e => set('costo_cierre', Number(e.target.value))} />
+            <Label>Costo de cierre</Label>
+            <Input type="number" value={form.costoCierre} onChange={onChange("costoCierre")} />
           </div>
-          <div>
-            <Label>Estado</Label>
-            <Input value={form.estado} onChange={e => set('estado', e.target.value as any)} />
-          </div>
-          <div>
-            <Label>Precio cierre</Label>
-            <Input type="number" step="0.01" value={form.precio_cierre ?? ''} onChange={e => set('precio_cierre', Number(e.target.value))} />
-          </div>
-
-          {/* Notas */}
           <div className="md:col-span-2">
             <Label>Notas</Label>
-            <Input value={form.notas || ''} onChange={e => set('notas', e.target.value)} />
+            <Input value={form.notas || ""} onChange={onChange("notas")} placeholder="Comentarios..." />
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancelar</Button>
-          <Button onClick={onSubmit} disabled={loading}>{initial ? 'Guardar' : 'Agregar'}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button onClick={onSubmit}>Guardar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

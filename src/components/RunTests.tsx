@@ -4,7 +4,7 @@ import { exportCSV, importCSV } from "@/lib/csv";
 import { computeKPIs, computeRoiPorTicker, Trade } from "@/lib/roi";
 import { useState } from "react";
 
-export function RunTests() {
+export default function RunTests() {
   const [log, setLog] = useState<string>('');
 
   function append(line: string) {

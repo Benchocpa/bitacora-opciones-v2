@@ -1,37 +1,58 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { KPIs } from "@/utils/roi";
+import * as React from "react"
 
-interface Props {
-  kpis: KPIs;
+type DivProps = React.HTMLAttributes<HTMLDivElement>
+
+const cn = (...xs: Array<string | false | null | undefined>) =>
+  xs.filter(Boolean).join(" ")
+
+// Contenedor principal
+export function Card({ className, ...props }: DivProps) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-white text-gray-900 shadow-sm",
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
-export function StatsCards({ kpis }: Props) {
+// Header
+export function CardHeader({ className, ...props }: DivProps) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Prima</CardTitle>
-        </CardHeader>
-        <CardContent>${kpis.prima.toFixed(2)}</CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Costos</CardTitle>
-        </CardHeader>
-        <CardContent>${kpis.costos.toFixed(2)}</CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Neto</CardTitle>
-        </CardHeader>
-        <CardContent>${kpis.neto.toFixed(2)}</CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>ROI</CardTitle>
-        </CardHeader>
-        <CardContent>{(kpis.roi * 100).toFixed(2)}%</CardContent>
-      </Card>
-    </div>
-  );
+    <div className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
+  )
+}
+
+// Título
+export function CardTitle({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLHeadingElement>) {
+  return (
+    <h3
+      className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+      {...props}
+    />
+  )
+}
+
+// Descripción (opcional si la usas)
+export function CardDescription({ className, ...props }: DivProps) {
+  return (
+    <p className={cn("text-sm text-gray-500", className)} {...props} />
+  )
+}
+
+// Contenido
+export function CardContent({ className, ...props }: DivProps) {
+  return <div className={cn("p-6 pt-0", className)} {...props} />
+}
+
+// Footer (opcional si lo usas)
+export function CardFooter({ className, ...props }: DivProps) {
+  return (
+    <div className={cn("flex items-center p-6 pt-0", className)} {...props} />
+  )
 }

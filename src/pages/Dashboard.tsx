@@ -1,13 +1,14 @@
 // src/pages/Dashboard.tsx
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { KPICards } from "@/components/KPICards";
-import { Trade, computeKPIs, computeRoiPorTicker } from "@/lib/roi";
-import { TradesTable } from "@/components/TradesTable";
-import { TradeFormModal } from "@/components/TradeFormModal";
 import { Button } from "@/components/ui/button";
-import { RoiBarChart } from "@/components/RoiBarChart";
 import { exportCSV, importCSV } from "@/lib/csv";
+import TradesTable from "@/components/TradesTable";
+import TradeFormModal from "@/components/TradeFormModal";
+import KPICards from "@/components/KPICards";
+import { computeKPIs, computeRoiGeneral } from "@/utils/roi";
+import type { Trade } from "@/types";
+import RoiBarChart from "@/components/RoiBarChart";
 
 export default function Dashboard() {
   const [trades, setTrades] = useState<(Trade & { id: string })[]>([]);
