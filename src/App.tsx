@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, FormEvent } from "react"
 import { supabase } from "./supabaseClient"
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,} from "recharts"
+import { getStockPrice } from "./services/priceService"
 
 
 // Tipo de cómo viene desde la BD (snake_case)
@@ -98,6 +99,7 @@ function App() {
   const [loadingPage, setLoadingPage] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isChartOpen, setIsChartOpen] = useState(false)
+  const [precios, setPrecios] = useState<Record<string, number | null>>({})
 
   // Cargar operaciones desde Supabase
   useEffect(() => {
@@ -126,6 +128,23 @@ function App() {
 
     fetchOps()
   }, [])
+  async function cargarPrecios() {
+  const tickers = Array.from(new Set(operaciones.map(o => o.ticker)))
+
+  const preciosTemp: Record<string, number | null> = {}
+
+  for (const t of tickers) {
+    preciosTemp[t] = await getStockPrice(t)
+  }
+
+  setPrecios(preciosTemp)
+}
+useEffect(() => {
+  if (operaciones.length > 0) {
+    cargarPrecios()
+  }
+}, [operaciones])
+
 
   // KPIs generales
   const stats = useMemo(() => {
@@ -406,6 +425,7 @@ function App() {
                 <thead>
                   <tr className="border-b bg-slate-50 text-left text-xs uppercase text-slate-500">
                     <th className="px-2 py-2">Ticker</th>
+                    <th className="px-2 py-2">Precio</th>
                     <th className="px-2 py-2 text-right">Operaciones</th>
                     <th className="px-2 py-2 text-right">Prima</th>
                     <th className="px-2 py-2 text-right">Costos</th>
@@ -423,6 +443,11 @@ function App() {
                     >
                       <td className="px-2 py-2 font-medium">
                         {item.ticker}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {precios[item.ticker] != null
+                          ? precios[item.ticker]!.toFixed(2)
+                          : "-"}
                       </td>
                       <td className="px-2 py-2 text-right">
                         {item.operaciones}
