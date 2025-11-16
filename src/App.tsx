@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, FormEvent } from "react"
 import { supabase } from "./supabaseClient"
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,} from "recharts"
+
 
 // Tipo de cómo viene desde la BD (snake_case)
 type DbOperacion = {
@@ -360,7 +362,7 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+        <main className="mx-auto max-w-6xl space-y-6 px-4 py-6">
         {loadingPage && (
           <p className="text-sm text-slate-500">Cargando operaciones…</p>
         )}
@@ -378,6 +380,46 @@ function App() {
           <Card title="Capital Inv." value={stats.capitalInv} />
         </div>
 
+        {/* 📊 Gráfica ROI por ticker */}
+        <section className="rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-lg font-semibold">
+            Gráfica ROI por ticker
+          </h2>
+
+          {roiPorTicker.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Aún no hay datos suficientes para mostrar la gráfica.
+            </p>
+          ) : (
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={roiPorTicker}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="ticker" />
+                  <YAxis />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      if (name === "roi") {
+                        return [`${(value as number).toFixed(2)}%`, "ROI"]
+                      }
+                      if (name === "neto") {
+                        return [(value as number).toFixed(2), "Neto"]
+                      }
+                      return value
+                    }}
+                  />
+                  <Legend />
+                  {/* Barra de ROI (%) */}
+                  <Bar dataKey="roi" name="ROI (%)" />
+                  {/* Barra de Neto en USD */}
+                  <Bar dataKey="neto" name="Neto ($)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </section>
+
+      
         {/* 🔥 ROI POR TICKER */}
         <section className="rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-3 text-lg font-semibold">ROI por ticker</h2>
