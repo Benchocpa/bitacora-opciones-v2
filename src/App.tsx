@@ -97,6 +97,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [loadingPage, setLoadingPage] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [isChartOpen, setIsChartOpen] = useState(false)
 
   // Cargar operaciones desde Supabase
   useEffect(() => {
@@ -380,49 +381,20 @@ function App() {
           <Card title="Capital Inv." value={stats.capitalInv} />
         </div>
 
-        {/* 📊 Gráfica ROI por ticker */}
-        <section className="rounded-xl bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-lg font-semibold">
-            Gráfica ROI por ticker
-          </h2>
-
-          {roiPorTicker.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              Aún no hay datos suficientes para mostrar la gráfica.
-            </p>
-          ) : (
-            <div className="h-72 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={roiPorTicker}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="ticker" />
-                  <YAxis />
-                  <Tooltip
-                    formatter={(value, name) => {
-                      if (name === "roi") {
-                        return [`${(value as number).toFixed(2)}%`, "ROI"]
-                      }
-                      if (name === "neto") {
-                        return [(value as number).toFixed(2), "Neto"]
-                      }
-                      return value
-                    }}
-                  />
-                  <Legend />
-                  {/* Barra de ROI (%) */}
-                  <Bar dataKey="roi" name="ROI (%)" />
-                  {/* Barra de Neto en USD */}
-                  <Bar dataKey="neto" name="Neto ($)" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </section>
-
-      
         {/* 🔥 ROI POR TICKER */}
         <section className="rounded-xl bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-lg font-semibold">ROI por ticker</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">ROI por ticker</h2>
+
+            {roiPorTicker.length > 0 && (
+              <button
+                onClick={() => setIsChartOpen(true)}
+                className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-100"
+             >
+                Ver gráfica
+             </button>
+            )}
+          </div>
 
           {roiPorTicker.length === 0 ? (
             <p className="text-sm text-slate-500">
@@ -703,6 +675,36 @@ function App() {
             </div>
           </div>
         )}
+        {isChartOpen && (
+  <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40">
+    <div className="w-full max-w-3xl rounded-xl bg-white p-4 shadow-lg">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Gráfica ROI por ticker</h2>
+        <button
+          onClick={() => setIsChartOpen(false)}
+          className="text-sm text-slate-500 hover:text-slate-800"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="h-80 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={roiPorTicker}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="ticker" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="roi" name="ROI (%)" />
+            <Bar dataKey="neto" name="Neto ($)" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  </div>
+)}
+
       </main>
     </div>
   )
