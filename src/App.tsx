@@ -93,6 +93,32 @@ function App() {
   const [precios, setPrecios] = useState<Record<string, number | null>>({})
   const [preciosCargados, setPreciosCargados] = useState(false)
 
+  // Modal de ROLADO
+  const [isRollOpen, setIsRollOpen] = useState(false)
+  const [rollBase, setRollBase] = useState<Operacion | null>(null)
+  const [rollForm, setRollForm] = useState({
+    fechaInicio: "",
+    fechaVencimiento: "",
+    strike: "",
+    primaRecibida: "",
+    comision: "",
+    costoCierre: "",
+  })
+
+  // Modal de CIERRE RÁPIDO
+    const [isCloseOpen, setIsCloseOpen] = useState(false)
+    const [closeOp, setCloseOp] = useState<Operacion | null>(null)
+    const [closeForm, setCloseForm] = useState<{
+      fechaCierre: string
+      comision: string
+      costoCierre: string
+    }>({
+      fechaCierre: "",
+      comision: "",
+      costoCierre: "",
+    })
+
+
   // ======================
   // Cargar operaciones desde Supabase
   // ======================
@@ -254,6 +280,10 @@ function App() {
     return Array.from(mapa.values())
   }, [operaciones])
 
+    function todayISO() {
+    return new Date().toISOString().slice(0, 10)
+  }
+
   // ======================
   // Handlers de formulario
   // ======================
@@ -282,7 +312,7 @@ function App() {
     setIsFormOpen(true)
   }
 
-  function closeForm() {
+  function closeFormModal() {
     setIsFormOpen(false)
     setEditingId(null)
     setForm(emptyForm)
@@ -320,7 +350,7 @@ function App() {
       }
 
       await cargarOperaciones()
-      closeForm()
+      closeFormModal()
     } catch (err: any) {
       console.error(err)
       setErrorMsg("No se pudo guardar la operación")
@@ -347,6 +377,126 @@ function App() {
       setLoading(false)
     }
   }
+// ======================
+// ROLAR OPERACIÓN
+// ======================
+
+function openRoll(op: Operacion) {
+  setRollBase(op)
+  setRollForm({
+    fechaInicio: todayISO(),
+    fechaVencimiento: op.fechaVencimiento ?? "",
+    strike: op.strike.toString(),
+    primaRecibida: "",
+    comision: "",
+    costoCierre: "",
+  })
+  setIsRollOpen(true)
+}
+
+function closeRollModal() {
+  setIsRollOpen(false)
+  setRollBase(null)
+}
+
+async function handleRollSubmit(e: React.FormEvent) {
+  e.preventDefault()
+  if (!rollBase) return
+
+  setLoading(true)
+  setErrorMsg(null)
+
+  try {
+    // 1) marcar la operación original como ROLEADA
+    const { error: updateError } = await supabase
+      .from("operaciones")
+      .update({
+        estado: "Roleada",
+        fecha_cierre: rollForm.fechaInicio || null,
+      })
+      .eq("id", rollBase.id)
+
+    if (updateError) throw updateError
+
+    // 2) crear la NUEVA operación rolada
+    const payload = {
+      fecha_inicio: rollForm.fechaInicio || null,
+      fecha_vencimiento: rollForm.fechaVencimiento || null,
+      fecha_cierre: null,
+      ticker: rollBase.ticker,
+      estrategia: rollBase.estrategia,
+      acciones: rollBase.acciones,
+      strike: Number(rollForm.strike || 0),
+      prima_recibida: Number(rollForm.primaRecibida || 0),
+      comision: Number(rollForm.comision || 0),
+      costo_cierre: Number(rollForm.costoCierre || 0),
+      estado: "Abierta",
+    }
+
+    const { error: insertError } = await supabase
+      .from("operaciones")
+      .insert(payload)
+
+    if (insertError) throw insertError
+
+    await cargarOperaciones()
+    closeRollModal()
+  } catch (err: any) {
+    console.error(err)
+    setErrorMsg("No se pudo rolar la operación")
+  } finally {
+    setLoading(false)
+  }
+}
+
+// ======================
+// CERRAR OPERACIÓN
+// ======================
+
+function openCloseModal(op: Operacion) {
+  setCloseOp(op)
+  setCloseForm({
+    fechaCierre: todayISO(),
+    comision: op.comision.toString(),
+    costoCierre: op.costoCierre.toString(),
+  })
+  setIsCloseOpen(true)
+}
+
+function closeCloseModal() {
+  setIsCloseOpen(false)
+  setCloseOp(null)
+}
+
+async function handleCloseSubmit(e: React.FormEvent) {
+  e.preventDefault()
+  if (!closeOp) return
+
+  setLoading(true)
+  setErrorMsg(null)
+
+  try {
+    const { error } = await supabase
+      .from("operaciones")
+      .update({
+        fecha_cierre: closeForm.fechaCierre || null,
+        comision: Number(closeForm.comision || 0),
+        costo_cierre: Number(closeForm.costoCierre || 0),
+        estado: "Cerrada",
+      })
+      .eq("id", closeOp.id)
+
+    if (error) throw error
+
+    await cargarOperaciones()
+    closeCloseModal()
+  } catch (err: any) {
+    console.error(err)
+    setErrorMsg("No se pudo cerrar la operación")
+  } finally {
+    setLoading(false)
+  }
+}
 
   // ======================
   // Render
@@ -582,22 +732,34 @@ function App() {
                           {op.estado}
                         </span>
                       </td>
-                      <td className="px-2 py-2 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            onClick={() => openEdit(op)}
-                            className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            onClick={() => handleDelete(op.id)}
-                            className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
+                        <td className="px-2 py-2 text-right">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <button
+                              onClick={() => openRoll(op)}
+                              className="rounded-md border border-amber-300 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50"
+                            >
+                              Rolar
+                            </button>
+                            <button
+                              onClick={() => openCloseModal(op)}
+                              className="rounded-md border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                            >
+                              Cerrar
+                            </button>
+                            <button
+                              onClick={() => openEdit(op)}
+                              className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              onClick={() => handleDelete(op.id)}
+                              className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </td>
                     </tr>
                   ))}
                 </tbody>
@@ -615,7 +777,7 @@ function App() {
                   {editingId ? "Editar operación" : "Nueva operación"}
                 </h2>
                 <button
-                  onClick={closeForm}
+                  onClick={closeFormModal}
                   className="text-sm text-slate-500 hover:text-slate-800"
                 >
                   ✕
@@ -802,7 +964,7 @@ function App() {
                 <div className="col-span-2 mt-2 flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={closeForm}
+                    onClick={closeFormModal}
                     className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
                     disabled={loading}
                   >
@@ -824,6 +986,237 @@ function App() {
             </div>
           </div>
         )}
+              {/* Modal de ROLADO */}
+              {isRollOpen && rollBase && (
+                <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
+                  <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-lg">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h2 className="text-lg font-semibold">
+                        Rolar operación ({rollBase.ticker})
+                      </h2>
+                      <button
+                        onClick={closeRollModal}
+                        className="text-sm text-slate-500 hover:text-slate-800"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <p className="mb-3 text-xs text-slate-500">
+                      Se marcará la operación actual como <strong>Roleada</strong> y se
+                      creará una nueva operación con los datos de abajo.
+                    </p>
+
+                    <form className="grid gap-3 md:grid-cols-2" onSubmit={handleRollSubmit}>
+                      <div className="flex flex-col gap-1 md:col-span-2">
+                        <label className="text-xs font-medium text-slate-600">
+                          Ticker
+                        </label>
+                        <input
+                          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm"
+                          value={rollBase.ticker}
+                          disabled
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Fecha inicio (nuevo)
+                        </label>
+                        <input
+                          type="date"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.fechaInicio}
+                          onChange={(e) =>
+                            setRollForm((f) => ({ ...f, fechaInicio: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Fecha vencimiento (nuevo)
+                        </label>
+                        <input
+                          type="date"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.fechaVencimiento}
+                          onChange={(e) =>
+                            setRollForm((f) => ({
+                              ...f,
+                              fechaVencimiento: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Strike (nuevo)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.strike}
+                          onChange={(e) =>
+                            setRollForm((f) => ({ ...f, strike: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Prima recibida (nuevo)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.primaRecibida}
+                          onChange={(e) =>
+                            setRollForm((f) => ({
+                              ...f,
+                              primaRecibida: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Comisión (nuevo)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.comision}
+                          onChange={(e) =>
+                            setRollForm((f) => ({ ...f, comision: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Costo cierre inmediato (si aplica)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={rollForm.costoCierre}
+                          onChange={(e) =>
+                            setRollForm((f) => ({ ...f, costoCierre: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="col-span-2 mt-2 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={closeRollModal}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+                          disabled={loading}
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="rounded-md bg-amber-600 px-4 py-1 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+                          disabled={loading}
+                        >
+                          {loading ? "Rolando..." : "Confirmar rolado"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* Modal de CIERRE RÁPIDO */}
+              {isCloseOpen && closeOp && (
+                <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
+                  <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h2 className="text-lg font-semibold">
+                        Cerrar operación ({closeOp.ticker})
+                      </h2>
+                      <button
+                        onClick={closeCloseModal}
+                        className="text-sm text-slate-500 hover:text-slate-800"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <form className="grid gap-3" onSubmit={handleCloseSubmit}>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Fecha de cierre
+                        </label>
+                        <input
+                          type="date"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={closeForm.fechaCierre}
+                          onChange={(e) =>
+                            setCloseForm((f) => ({ ...f, fechaCierre: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Comisión final
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={closeForm.comision}
+                          onChange={(e) =>
+                            setCloseForm((f) => ({ ...f, comision: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">
+                          Costo cierre (débito/crédito)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                          value={closeForm.costoCierre}
+                          onChange={(e) =>
+                            setCloseForm((f) => ({ ...f, costoCierre: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-2 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={closeCloseModal}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+                          disabled={loading}
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="rounded-md bg-emerald-600 px-4 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                          disabled={loading}
+                        >
+                          {loading ? "Cerrando..." : "Confirmar cierre"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
 
         {/* Modal gráfica ROI */}
         {isChartOpen && (
