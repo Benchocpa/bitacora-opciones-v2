@@ -5,7 +5,7 @@ export async function getStockPrice(rawTicker: string): Promise<number | null> {
     const ticker = rawTicker.trim().toUpperCase()
 
     if (!API_KEY) {
-      console.error("Falta VITE_STOCK_API_KEY en el .env")
+      console.error("Falta VITE_STOCK_API_KEY en el .env (build)")
       return null
     }
 
@@ -13,6 +13,20 @@ export async function getStockPrice(rawTicker: string): Promise<number | null> {
 
     const res = await fetch(url)
     const data = await res.json()
+
+    // 👇 nuevo: detectar límite o mensaje "Information"
+    if (data.Note || data.Information) {
+      console.warn(
+        "Alpha Vantage límite diario / premium:",
+        data.Note ?? data.Information,
+      )
+      return null
+    }
+
+    if (data["Error Message"]) {
+      console.warn("Error de Alpha Vantage:", data["Error Message"])
+      return null
+    }
 
     const priceStr = data?.["Global Quote"]?.["05. price"]
     const price = priceStr ? Number(priceStr) : null
