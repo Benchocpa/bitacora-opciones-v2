@@ -25,11 +25,12 @@ type Operacion = {
   estrategia: string
   acciones: number
   strike: number
-  primaRecibida: number
+  primaRecibida: number      // prima de la última pata (lo que se ve en la tabla)
+  primaTotal?: number        // suma de todas las primas de esa operación
   comision: number
   costoCierre: number
   capitalInv: number
-  neto: number
+  neto: number               // neto de la última pata (para la tabla)
   roi: number
   estado: string
 }
@@ -57,6 +58,7 @@ type TickerStats = {
   capitalInv: number
   breakEven: number
   roi: number
+  accionesTotales: number
 }
 
 // ======================
@@ -106,18 +108,17 @@ function App() {
   })
 
   // Modal de CIERRE RÁPIDO
-    const [isCloseOpen, setIsCloseOpen] = useState(false)
-    const [closeOp, setCloseOp] = useState<Operacion | null>(null)
-    const [closeForm, setCloseForm] = useState<{
-      fechaCierre: string
-      comision: string
-      costoCierre: string
-    }>({
-      fechaCierre: "",
-      comision: "",
-      costoCierre: "",
-    })
-
+  const [isCloseOpen, setIsCloseOpen] = useState(false)
+  const [closeOp, setCloseOp] = useState<Operacion | null>(null)
+  const [closeForm, setCloseForm] = useState<{
+    fechaCierre: string
+    comision: string
+    costoCierre: string
+  }>({
+    fechaCierre: "",
+    comision: "",
+    costoCierre: "",
+  })
 
   // ======================
   // Cargar operaciones desde Supabase
@@ -143,12 +144,27 @@ function App() {
       data?.map((row: any): Operacion => {
         const acciones = Number(row.acciones ?? 0)
         const strike = Number(row.strike ?? 0)
-        const prima = Number(row.prima_recibida ?? row.primaRecibida ?? 0)
+
+        const primaRecibida = Number(
+          row.prima_recibida ?? row.primaRecibida ?? 0,
+        )
+
+        const primaTotal = Number(
+          row.prima_total ??
+            row.primaTotal ??
+            row.prima_recibida ??
+            row.primaRecibida ??
+            0,
+        )
+
         const comision = Number(row.comision ?? 0)
         const costoCierre = Number(row.costo_cierre ?? row.costoCierre ?? 0)
 
         const capitalInv = acciones * strike
-        const neto = prima - comision - costoCierre
+
+        // ❗ Neto por operación (tabla) = SOLO última pata (último roll)
+        const neto = primaRecibida - comision - costoCierre
+
         const roi = capitalInv > 0 ? (neto / capitalInv) * 100 : 0
 
         return {
@@ -161,15 +177,13 @@ function App() {
             row.fechavencimiento ??
             null,
           fechaCierre:
-            row.fecha_cierre ??
-            row.fechaCierre ??
-            row.fechacierre ??
-            null,
+            row.fecha_cierre ?? row.fechaCierre ?? row.fechacierre ?? null,
           ticker: (row.ticker ?? "").toUpperCase(),
           estrategia: row.estrategia ?? row.estretegia ?? "",
           acciones,
           strike,
-          primaRecibida: prima,
+          primaRecibida,
+          primaTotal,
           comision,
           costoCierre,
           capitalInv,
@@ -188,7 +202,7 @@ function App() {
   }, [])
 
   // ======================
-  // Cargar precios con Alpha Vantage (priceService)
+  // Cargar precios
   // ======================
 
   async function cargarPrecios() {
@@ -206,28 +220,43 @@ function App() {
   }
 
   useEffect(() => {
-  if (operaciones.length > 0 && !preciosCargados) {
-    setPreciosCargados(true)
-    cargarPrecios()
-  }
-}, [operaciones, preciosCargados])
+    if (operaciones.length > 0 && !preciosCargados) {
+      setPreciosCargados(true)
+      cargarPrecios()
+    }
+  }, [operaciones, preciosCargados])
 
   // ======================
-  // Cálculos derivados (useMemo)
+  // Cálculos derivados
   // ======================
 
+  // Card "Prima": usa prima_total (acumulada)
   const totalPrima = useMemo(
-    () => operaciones.reduce((acc, op) => acc + op.primaRecibida, 0),
+    () =>
+      operaciones.reduce(
+        (acc, op) => acc + (op.primaTotal ?? op.primaRecibida ?? 0),
+        0,
+      ),
     [operaciones],
   )
 
   const totalCostos = useMemo(
-    () => operaciones.reduce((acc, op) => acc + op.comision + op.costoCierre, 0),
+    () =>
+      operaciones.reduce(
+        (acc, op) => acc + op.comision + op.costoCierre,
+        0,
+      ),
     [operaciones],
   )
 
+  // Card "Neto": calcula con prima_total (acumulada)
   const totalNeto = useMemo(
-    () => operaciones.reduce((acc, op) => acc + op.neto, 0),
+    () =>
+      operaciones.reduce((acc, op) => {
+        const prima = op.primaTotal ?? op.primaRecibida ?? 0
+        const costos = op.comision + op.costoCierre
+        return acc + (prima - costos)
+      }, 0),
     [operaciones],
   )
 
@@ -241,6 +270,7 @@ function App() {
     [totalNeto, totalCapitalInv],
   )
 
+  // ROI por ticker: usa prima_total (acumulada) por ticker
   const roiPorTicker: TickerStats[] = useMemo(() => {
     const mapa = new Map<string, TickerStats>()
 
@@ -255,32 +285,37 @@ function App() {
           capitalInv: 0,
           breakEven: 0,
           roi: 0,
+          accionesTotales: 0,
         })
       }
 
       const item = mapa.get(op.ticker)!
-      item.operaciones += 1
-      item.prima += op.primaRecibida
-      item.costos += op.comision + op.costoCierre
-      item.neto += op.neto
-      item.capitalInv += op.capitalInv
+      const primaOp = op.primaTotal ?? op.primaRecibida ?? 0
+      const costosOp = op.comision + op.costoCierre
 
-      // break-even aproximado: strike - (prima / acciones)
-      const primaPorAccion =
-        op.acciones > 0 ? op.primaRecibida / op.acciones : 0
-      const be = op.strike - primaPorAccion
-      item.breakEven = be
+      item.operaciones += 1
+      item.prima += primaOp
+      item.costos += costosOp
+      item.neto += primaOp - costosOp
+      item.capitalInv += op.capitalInv
+      item.accionesTotales += op.acciones
     }
 
     for (const item of mapa.values()) {
       item.roi =
         item.capitalInv > 0 ? (item.neto / item.capitalInv) * 100 : 0
+
+      const totalAcc = item.accionesTotales
+      const primaPorAccion = totalAcc > 0 ? item.prima / totalAcc : 0
+      const strikePromedio = totalAcc > 0 ? item.capitalInv / totalAcc : 0
+
+      item.breakEven = strikePromedio - primaPorAccion
     }
 
     return Array.from(mapa.values())
   }, [operaciones])
 
-    function todayISO() {
+  function todayISO() {
     return new Date().toISOString().slice(0, 10)
   }
 
@@ -324,6 +359,8 @@ function App() {
     setErrorMsg(null)
 
     try {
+      const prima = Number(form.primaRecibida || 0)
+
       const payload = {
         fecha_inicio: form.fechaInicio || null,
         fecha_vencimiento: form.fechaVencimiento || null,
@@ -332,7 +369,8 @@ function App() {
         estrategia: form.estrategia,
         acciones: Number(form.acciones || 0),
         strike: Number(form.strike || 0),
-        prima_recibida: Number(form.primaRecibida || 0),
+        prima_recibida: prima, // última pata
+        prima_total: prima,    // primera vez, total = prima
         comision: Number(form.comision || 0),
         costo_cierre: Number(form.costoCierre || 0),
         estado: form.estado || "Abierta",
@@ -377,126 +415,140 @@ function App() {
       setLoading(false)
     }
   }
-// ======================
-// ROLAR OPERACIÓN
-// ======================
 
-function openRoll(op: Operacion) {
-  setRollBase(op)
-  setRollForm({
-    fechaInicio: todayISO(),
-    fechaVencimiento: op.fechaVencimiento ?? "",
-    strike: op.strike.toString(),
-    primaRecibida: "",
-    comision: "",
-    costoCierre: "",
-  })
-  setIsRollOpen(true)
-}
+  // ======================
+  // ROLAR OPERACIÓN
+  // ======================
 
-function closeRollModal() {
-  setIsRollOpen(false)
-  setRollBase(null)
-}
-
-async function handleRollSubmit(e: React.FormEvent) {
-  e.preventDefault()
-  if (!rollBase) return
-
-  setLoading(true)
-  setErrorMsg(null)
-
-  try {
-    // 1) marcar la operación original como ROLEADA
-    const { error: updateError } = await supabase
-      .from("operaciones")
-      .update({
-        estado: "Roleada",
-        fecha_cierre: rollForm.fechaInicio || null,
-      })
-      .eq("id", rollBase.id)
-
-    if (updateError) throw updateError
-
-    // 2) crear la NUEVA operación rolada
-    const payload = {
-      fecha_inicio: rollForm.fechaInicio || null,
-      fecha_vencimiento: rollForm.fechaVencimiento || null,
-      fecha_cierre: null,
-      ticker: rollBase.ticker,
-      estrategia: rollBase.estrategia,
-      acciones: rollBase.acciones,
-      strike: Number(rollForm.strike || 0),
-      prima_recibida: Number(rollForm.primaRecibida || 0),
-      comision: Number(rollForm.comision || 0),
-      costo_cierre: Number(rollForm.costoCierre || 0),
-      estado: "Abierta",
+  function openRoll(op: Operacion) {
+    if (op.estado === "Cerrada" || op.estado === "Expirada") {
+      setErrorMsg("No se puede rolar una operación cerrada o expirada.")
+      return
     }
 
-    const { error: insertError } = await supabase
-      .from("operaciones")
-      .insert(payload)
-
-    if (insertError) throw insertError
-
-    await cargarOperaciones()
-    closeRollModal()
-  } catch (err: any) {
-    console.error(err)
-    setErrorMsg("No se pudo rolar la operación")
-  } finally {
-    setLoading(false)
+    setRollBase(op)
+    setRollForm({
+      fechaInicio: todayISO(),
+      fechaVencimiento: op.fechaVencimiento ?? "",
+      strike: op.strike.toString(),
+      primaRecibida: "",
+      comision: "",
+      costoCierre: "",
+    })
+    setIsRollOpen(true)
   }
-}
 
-// ======================
-// CERRAR OPERACIÓN
-// ======================
-
-function openCloseModal(op: Operacion) {
-  setCloseOp(op)
-  setCloseForm({
-    fechaCierre: todayISO(),
-    comision: op.comision.toString(),
-    costoCierre: op.costoCierre.toString(),
-  })
-  setIsCloseOpen(true)
-}
-
-function closeCloseModal() {
-  setIsCloseOpen(false)
-  setCloseOp(null)
-}
-
-async function handleCloseSubmit(e: React.FormEvent) {
-  e.preventDefault()
-  if (!closeOp) return
-
-  setLoading(true)
-  setErrorMsg(null)
-
-  try {
-    const { error } = await supabase
-      .from("operaciones")
-      .update({
-        fecha_cierre: closeForm.fechaCierre || null,
-        comision: Number(closeForm.comision || 0),
-        costo_cierre: Number(closeForm.costoCierre || 0),
-        estado: "Cerrada",
-      })
-      .eq("id", closeOp.id)
-
-    if (error) throw error
-
-    await cargarOperaciones()
-    closeCloseModal()
-  } catch (err: any) {
-    console.error(err)
-    setErrorMsg("No se pudo cerrar la operación")
-  } finally {
-    setLoading(false)
+  function closeRollModal() {
+    setIsRollOpen(false)
+    setRollBase(null)
   }
-}
+
+  async function handleRollSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!rollBase) return
+
+    setLoading(true)
+    setErrorMsg(null)
+
+    try {
+      if (!rollBase) {
+        setErrorMsg("Error interno: no hay operación para rolar")
+        return
+      }
+
+      const primaNueva = Number(rollForm.primaRecibida || 0)
+
+      const primaTotalAnterior = Number(
+        rollBase.primaTotal ?? rollBase.primaRecibida ?? 0,
+      )
+
+      const primaTotalActualizada = primaTotalAnterior + primaNueva
+
+      const payload = {
+        fecha_inicio: rollForm.fechaInicio || null,
+        fecha_vencimiento: rollForm.fechaVencimiento || null,
+        fecha_cierre: rollForm.fechaInicio || null,
+        ticker: rollBase.ticker,
+        estrategia: rollBase.estrategia,
+        acciones: rollBase.acciones,
+        strike: Number(rollForm.strike || 0),
+
+        // última pata (se ve en la tabla)
+        prima_recibida: primaNueva,
+
+        // prima acumulada (se usa para ROI / Prima general)
+        prima_total: primaTotalActualizada,
+
+        comision: Number(rollForm.comision || 0),
+        costo_cierre: Number(rollForm.costoCierre || 0),
+        estado: "Roleada",
+      }
+
+      const { error: updateError } = await supabase
+        .from("operaciones")
+        .update(payload)
+        .eq("id", rollBase.id)
+
+      if (updateError) throw updateError
+
+      await cargarOperaciones()
+      closeRollModal()
+    } catch (err: any) {
+      console.error(err)
+      setErrorMsg("No se pudo rolar la operación")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ======================
+  // CERRAR OPERACIÓN
+  // ======================
+
+  function openCloseModal(op: Operacion) {
+    setCloseOp(op)
+    setCloseForm({
+      fechaCierre: todayISO(),
+      comision: op.comision.toString(),
+      costoCierre: op.costoCierre.toString(),
+    })
+    setIsCloseOpen(true)
+  }
+
+  function closeCloseModal() {
+    setIsCloseOpen(false)
+    setCloseOp(null)
+  }
+
+  async function handleCloseSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!closeOp) return
+
+    setLoading(true)
+    setErrorMsg(null)
+
+    try {
+      const { error } = await supabase
+        .from("operaciones")
+        .update({
+          fecha_cierre: closeForm.fechaCierre || null,
+          comision: Number(closeForm.comision || 0),
+          costo_cierre: Number(closeForm.costoCierre || 0),
+          estado: "Cerrada",
+        })
+        .eq("id", closeOp.id)
+
+      if (error) throw error
+
+      await cargarOperaciones()
+      closeCloseModal()
+    } catch (err: any) {
+      console.error(err)
+      setErrorMsg("No se pudo cerrar la operación")
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // ======================
   // Render
@@ -506,9 +558,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
     <div className="min-h-screen bg-slate-100">
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <h1 className="text-xl font-semibold">
-            Bitácora de Opciones V2
-          </h1>
+          <h1 className="text-xl font-semibold">Bitácora de Opciones V2</h1>
           <button
             onClick={openNew}
             className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
@@ -667,41 +717,46 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   </tr>
                 </thead>
                 <tbody>
-                  {operaciones.map((op) => (
-                    <tr
-                      key={op.id}
-                      className="border-b last:border-0 hover:bg-slate-50"
-                    >
-                      <td className="px-2 py-2 font-medium">
-                        {op.ticker}
-                      </td>
-                      <td className="px-2 py-2">{op.estrategia}</td>
-                      <td className="px-2 py-2">
-                        {op.fechaInicio || "—"}
-                      </td>
-                      <td className="px-2 py-2">
-                        {op.fechaVencimiento || "—"}
-                      </td>
-                      <td className="px-2 py-2">
-                        {op.fechaCierre || "—"}
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        {op.acciones}
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        {op.strike.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        {op.primaRecibida.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        {op.comision.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        {op.costoCierre.toFixed(2)}
-                      </td>
-                      <td
-                        className={`
+                  {operaciones.map((op) => {
+                    const canRoll =
+                      op.estado !== "Cerrada" &&
+                      op.estado !== "Expirada"
+
+                    return (
+                      <tr
+                        key={op.id}
+                        className="border-b last:border-0 hover:bg-slate-50"
+                      >
+                        <td className="px-2 py-2 font-medium">
+                          {op.ticker}
+                        </td>
+                        <td className="px-2 py-2">{op.estrategia}</td>
+                        <td className="px-2 py-2">
+                          {op.fechaInicio || "—"}
+                        </td>
+                        <td className="px-2 py-2">
+                          {op.fechaVencimiento || "—"}
+                        </td>
+                        <td className="px-2 py-2">
+                          {op.fechaCierre || "—"}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {op.acciones}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {op.strike.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {op.primaRecibida.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {op.comision.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {op.costoCierre.toFixed(2)}
+                        </td>
+                        <td
+                          className={`
                           px-2 py-2 text-right
                           ${
                             op.neto > 0
@@ -711,12 +766,12 @@ async function handleCloseSubmit(e: React.FormEvent) {
                               : "text-slate-600"
                           }
                         `}
-                      >
-                        {op.neto.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2">
-                        <span
-                          className={`
+                        >
+                          {op.neto.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-2">
+                          <span
+                            className={`
                             rounded-full px-2 py-1 text-xs font-medium
                             ${
                               op.estado === "Abierta"
@@ -728,15 +783,20 @@ async function handleCloseSubmit(e: React.FormEvent) {
                                 : "bg-slate-100 text-slate-600"
                             }
                           `}
-                        >
-                          {op.estado}
-                        </span>
-                      </td>
+                          >
+                            {op.estado}
+                          </span>
+                        </td>
                         <td className="px-2 py-2 text-right">
                           <div className="flex flex-wrap justify-end gap-2">
                             <button
-                              onClick={() => openRoll(op)}
-                              className="rounded-md border border-amber-300 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50"
+                              onClick={() => canRoll && openRoll(op)}
+                              className={`rounded-md border px-2 py-1 text-xs ${
+                                canRoll
+                                  ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                  : "cursor-not-allowed border-slate-200 text-slate-300"
+                              }`}
+                              disabled={!canRoll}
                             >
                               Rolar
                             </button>
@@ -760,8 +820,9 @@ async function handleCloseSubmit(e: React.FormEvent) {
                             </button>
                           </div>
                         </td>
-                    </tr>
-                  ))}
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -788,6 +849,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                 className="grid gap-3 md:grid-cols-2"
                 onSubmit={handleSubmit}
               >
+                {/* Ticker */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Ticker
@@ -805,6 +867,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Estrategia */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Estrategia
@@ -818,6 +881,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Fecha inicio */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Fecha inicio
@@ -832,6 +896,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Fecha vencimiento */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Fecha vencimiento
@@ -849,6 +914,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Fecha cierre */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Fecha cierre
@@ -863,6 +929,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Acciones */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Acciones
@@ -877,6 +944,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Strike */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Strike
@@ -892,6 +960,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Prima recibida */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Prima recibida
@@ -910,6 +979,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Comisión */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Comisión
@@ -925,6 +995,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Costo cierre */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Costo cierre
@@ -943,6 +1014,7 @@ async function handleCloseSubmit(e: React.FormEvent) {
                   />
                 </div>
 
+                {/* Estado */}
                 <div className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-slate-600">
                     Estado
@@ -986,237 +1058,262 @@ async function handleCloseSubmit(e: React.FormEvent) {
             </div>
           </div>
         )}
-              {/* Modal de ROLADO */}
-              {isRollOpen && rollBase && (
-                <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
-                  <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-lg">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h2 className="text-lg font-semibold">
-                        Rolar operación ({rollBase.ticker})
-                      </h2>
-                      <button
-                        onClick={closeRollModal}
-                        className="text-sm text-slate-500 hover:text-slate-800"
-                      >
-                        ✕
-                      </button>
-                    </div>
 
-                    <p className="mb-3 text-xs text-slate-500">
-                      Se marcará la operación actual como <strong>Roleada</strong> y se
-                      creará una nueva operación con los datos de abajo.
-                    </p>
+        {/* Modal de ROLADO */}
+        {isRollOpen && rollBase && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-lg">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">
+                  Rolar operación ({rollBase.ticker})
+                </h2>
+                <button
+                  onClick={closeRollModal}
+                  className="text-sm text-slate-500 hover:text-slate-800"
+                >
+                  ✕
+                </button>
+              </div>
 
-                    <form className="grid gap-3 md:grid-cols-2" onSubmit={handleRollSubmit}>
-                      <div className="flex flex-col gap-1 md:col-span-2">
-                        <label className="text-xs font-medium text-slate-600">
-                          Ticker
-                        </label>
-                        <input
-                          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm"
-                          value={rollBase.ticker}
-                          disabled
-                        />
-                      </div>
+              <p className="mb-3 text-xs text-slate-500">
+                Se actualizará esta operación con las nuevas fechas, strike y
+                prima. La prima total acumulada se irá sumando con cada rolado.
+              </p>
 
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Fecha inicio (nuevo)
-                        </label>
-                        <input
-                          type="date"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.fechaInicio}
-                          onChange={(e) =>
-                            setRollForm((f) => ({ ...f, fechaInicio: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Fecha vencimiento (nuevo)
-                        </label>
-                        <input
-                          type="date"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.fechaVencimiento}
-                          onChange={(e) =>
-                            setRollForm((f) => ({
-                              ...f,
-                              fechaVencimiento: e.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Strike (nuevo)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.strike}
-                          onChange={(e) =>
-                            setRollForm((f) => ({ ...f, strike: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Prima recibida (nuevo)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.primaRecibida}
-                          onChange={(e) =>
-                            setRollForm((f) => ({
-                              ...f,
-                              primaRecibida: e.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Comisión (nuevo)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.comision}
-                          onChange={(e) =>
-                            setRollForm((f) => ({ ...f, comision: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Costo cierre inmediato (si aplica)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={rollForm.costoCierre}
-                          onChange={(e) =>
-                            setRollForm((f) => ({ ...f, costoCierre: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="col-span-2 mt-2 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={closeRollModal}
-                          className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
-                          disabled={loading}
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          type="submit"
-                          className="rounded-md bg-amber-600 px-4 py-1 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
-                          disabled={loading}
-                        >
-                          {loading ? "Rolando..." : "Confirmar rolado"}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
+              <form
+                className="grid gap-3 md:grid-cols-2"
+                onSubmit={handleRollSubmit}
+              >
+                <div className="flex flex-col gap-1 md:col-span-2">
+                  <label className="text-xs font-medium text-slate-600">
+                    Ticker
+                  </label>
+                  <input
+                    className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm"
+                    value={rollBase.ticker}
+                    disabled
+                  />
                 </div>
-              )}
 
-              {/* Modal de CIERRE RÁPIDO */}
-              {isCloseOpen && closeOp && (
-                <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
-                  <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h2 className="text-lg font-semibold">
-                        Cerrar operación ({closeOp.ticker})
-                      </h2>
-                      <button
-                        onClick={closeCloseModal}
-                        className="text-sm text-slate-500 hover:text-slate-800"
-                      >
-                        ✕
-                      </button>
-                    </div>
-
-                    <form className="grid gap-3" onSubmit={handleCloseSubmit}>
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Fecha de cierre
-                        </label>
-                        <input
-                          type="date"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={closeForm.fechaCierre}
-                          onChange={(e) =>
-                            setCloseForm((f) => ({ ...f, fechaCierre: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Comisión final
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={closeForm.comision}
-                          onChange={(e) =>
-                            setCloseForm((f) => ({ ...f, comision: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-slate-600">
-                          Costo cierre (débito/crédito)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                          value={closeForm.costoCierre}
-                          onChange={(e) =>
-                            setCloseForm((f) => ({ ...f, costoCierre: e.target.value }))
-                          }
-                        />
-                      </div>
-
-                      <div className="mt-2 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={closeCloseModal}
-                          className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
-                          disabled={loading}
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          type="submit"
-                          className="rounded-md bg-emerald-600 px-4 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                          disabled={loading}
-                        >
-                          {loading ? "Cerrando..." : "Confirmar cierre"}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Fecha inicio (nuevo)
+                  </label>
+                  <input
+                    type="date"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.fechaInicio}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        fechaInicio: e.target.value,
+                      }))
+                    }
+                  />
                 </div>
-              )}
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Fecha vencimiento (nuevo)
+                  </label>
+                  <input
+                    type="date"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.fechaVencimiento}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        fechaVencimiento: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Strike (nuevo)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.strike}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        strike: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Prima recibida (nuevo)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.primaRecibida}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        primaRecibida: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Comisión (nuevo)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.comision}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        comision: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Costo cierre inmediato (si aplica)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={rollForm.costoCierre}
+                    onChange={(e) =>
+                      setRollForm((f) => ({
+                        ...f,
+                        costoCierre: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="col-span-2 mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeRollModal}
+                    className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+                    disabled={loading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-amber-600 px-4 py-1 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+                    disabled={loading}
+                  >
+                    {loading ? "Rolando..." : "Confirmar rolado"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de CIERRE RÁPIDO */}
+        {isCloseOpen && closeOp && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">
+                  Cerrar operación ({closeOp.ticker})
+                </h2>
+                <button
+                  onClick={closeCloseModal}
+                  className="text-sm text-slate-500 hover:text-slate-800"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form className="grid gap-3" onSubmit={handleCloseSubmit}>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Fecha de cierre
+                  </label>
+                  <input
+                    type="date"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={closeForm.fechaCierre}
+                    onChange={(e) =>
+                      setCloseForm((f) => ({
+                        ...f,
+                        fechaCierre: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Comisión final
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={closeForm.comision}
+                    onChange={(e) =>
+                      setCloseForm((f) => ({
+                        ...f,
+                        comision: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Costo cierre (débito/crédito)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={closeForm.costoCierre}
+                    onChange={(e) =>
+                      setCloseForm((f) => ({
+                        ...f,
+                        costoCierre: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeCloseModal}
+                    className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+                    disabled={loading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-emerald-600 px-4 py-1 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                    disabled={loading}
+                  >
+                    {loading ? "Cerrando..." : "Confirmar cierre"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Modal gráfica ROI */}
         {isChartOpen && (
