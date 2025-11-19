@@ -11,6 +11,11 @@ import {
   Tooltip,
   Legend,
 } from "recharts"
+import Historial from "./components/Historial"
+import {
+  cargarHistorial,
+  registrarEventoHistorial,
+} from "./services/historialService"
 
 // ======================
 // Tipos
@@ -25,14 +30,15 @@ type Operacion = {
   estrategia: string
   acciones: number
   strike: number
-  primaRecibida: number      // prima de la última pata (lo que se ve en la tabla)
-  primaTotal?: number        // suma de todas las primas de esa operación
+  primaRecibida: number
+  primaTotal?: number
   comision: number
   costoCierre: number
   capitalInv: number
-  neto: number               // neto de la última pata (para la tabla)
+  neto: number
   roi: number
   estado: string
+  nota?: string | null
 }
 
 type FormState = {
@@ -47,6 +53,7 @@ type FormState = {
   comision: string
   costoCierre: string
   estado: string
+  nota: string
 }
 
 type TickerStats = {
@@ -77,6 +84,7 @@ const emptyForm: FormState = {
   comision: "",
   costoCierre: "",
   estado: "Abierta",
+  nota: "",
 }
 
 // ======================
@@ -94,6 +102,9 @@ function App() {
   const [isChartOpen, setIsChartOpen] = useState(false)
   const [precios, setPrecios] = useState<Record<string, number | null>>({})
   const [preciosCargados, setPreciosCargados] = useState(false)
+
+  // Historial
+  const [historial, setHistorial] = useState<any[]>([])
 
   // Modal de ROLADO
   const [isRollOpen, setIsRollOpen] = useState(false)
@@ -162,7 +173,7 @@ function App() {
 
         const capitalInv = acciones * strike
 
-        // ❗ Neto por operación (tabla) = SOLO última pata (último roll)
+        // Neto para la tabla = solo la última prima
         const neto = primaRecibida - comision - costoCierre
 
         const roi = capitalInv > 0 ? (neto / capitalInv) * 100 : 0
@@ -190,6 +201,7 @@ function App() {
           neto,
           roi,
           estado: row.estado ?? "Abierta",
+          nota: row.nota ?? "",
         }
       }) ?? []
 
@@ -197,8 +209,18 @@ function App() {
     setLoadingPage(false)
   }
 
+  async function cargarHistorialState() {
+    try {
+      const data = await cargarHistorial()
+      setHistorial(data)
+    } catch (e) {
+      // ya se hace console.error en el servicio
+    }
+  }
+
   useEffect(() => {
     cargarOperaciones()
+    cargarHistorialState()
   }, [])
 
   // ======================
@@ -230,7 +252,6 @@ function App() {
   // Cálculos derivados
   // ======================
 
-  // Card "Prima": usa prima_total (acumulada)
   const totalPrima = useMemo(
     () =>
       operaciones.reduce(
@@ -249,7 +270,6 @@ function App() {
     [operaciones],
   )
 
-  // Card "Neto": calcula con prima_total (acumulada)
   const totalNeto = useMemo(
     () =>
       operaciones.reduce((acc, op) => {
@@ -270,7 +290,6 @@ function App() {
     [totalNeto, totalCapitalInv],
   )
 
-  // ROI por ticker: usa prima_total (acumulada) por ticker
   const roiPorTicker: TickerStats[] = useMemo(() => {
     const mapa = new Map<string, TickerStats>()
 
@@ -293,7 +312,7 @@ function App() {
       const primaOp = op.primaTotal ?? op.primaRecibida ?? 0
       const costosOp = op.comision + op.costoCierre
 
-      item.operaciones += 1
+      item.operaciones += op.acciones / 100 // "ROLLS / contratos"
       item.prima += primaOp
       item.costos += costosOp
       item.neto += primaOp - costosOp
@@ -343,6 +362,7 @@ function App() {
       comision: String(op.comision || ""),
       costoCierre: String(op.costoCierre || ""),
       estado: op.estado ?? "Abierta",
+      nota: op.nota ?? "",
     })
     setIsFormOpen(true)
   }
@@ -361,6 +381,25 @@ function App() {
     try {
       const prima = Number(form.primaRecibida || 0)
 
+      // calcular prima_total según sea creación o edición
+      let primaTotal: number
+
+      if (editingId == null) {
+        primaTotal = prima
+      } else {
+        const opAnterior = operaciones.find((op) => op.id === editingId)
+
+        if (opAnterior) {
+          const totalAnterior =
+            opAnterior.primaTotal ?? opAnterior.primaRecibida ?? 0
+          const ultimaPrimaAnterior = opAnterior.primaRecibida ?? 0
+
+          primaTotal = totalAnterior - ultimaPrimaAnterior + prima
+        } else {
+          primaTotal = prima
+        }
+      }
+
       const payload = {
         fecha_inicio: form.fechaInicio || null,
         fecha_vencimiento: form.fechaVencimiento || null,
@@ -369,25 +408,49 @@ function App() {
         estrategia: form.estrategia,
         acciones: Number(form.acciones || 0),
         strike: Number(form.strike || 0),
-        prima_recibida: prima, // última pata
-        prima_total: prima,    // primera vez, total = prima
+        prima_recibida: prima,
+        prima_total: primaTotal,
         comision: Number(form.comision || 0),
         costo_cierre: Number(form.costoCierre || 0),
         estado: form.estado || "Abierta",
+        nota: form.nota || null,
       }
 
       if (editingId == null) {
         const { error } = await supabase.from("operaciones").insert(payload)
         if (error) throw error
+
+        await registrarEventoHistorial({
+          tipo: "Creación",
+          ticker: payload.ticker,
+          prima,
+          comision: payload.comision,
+          costoCierre: payload.costo_cierre,
+          strike: payload.strike,
+          estado: payload.estado,
+          nota: payload.nota,
+        })
       } else {
         const { error } = await supabase
           .from("operaciones")
           .update(payload)
           .eq("id", editingId)
         if (error) throw error
+
+        await registrarEventoHistorial({
+          tipo: "Edición",
+          ticker: payload.ticker,
+          prima,
+          comision: payload.comision,
+          costoCierre: payload.costo_cierre,
+          strike: payload.strike,
+          estado: payload.estado,
+          nota: payload.nota,
+        })
       }
 
       await cargarOperaciones()
+      await cargarHistorialState()
       closeFormModal()
     } catch (err: any) {
       console.error(err)
@@ -402,12 +465,30 @@ function App() {
     setLoading(true)
     setErrorMsg(null)
     try {
+      const opDel = operaciones.find((o) => o.id === id) || null
+
       const { error } = await supabase
         .from("operaciones")
         .delete()
         .eq("id", id)
       if (error) throw error
+
+      if (opDel) {
+        await registrarEventoHistorial({
+          tipo: "Eliminación",
+          ticker: opDel.ticker,
+          prima:
+            opDel.primaTotal ?? opDel.primaRecibida ?? 0,
+          comision: opDel.comision,
+          costoCierre: opDel.costoCierre,
+          strike: opDel.strike,
+          estado: opDel.estado,
+          nota: opDel.nota ?? null,
+        })
+      }
+
       await cargarOperaciones()
+      await cargarHistorialState()
     } catch (err: any) {
       console.error(err)
       setErrorMsg("No se pudo eliminar la operación")
@@ -451,11 +532,6 @@ function App() {
     setErrorMsg(null)
 
     try {
-      if (!rollBase) {
-        setErrorMsg("Error interno: no hay operación para rolar")
-        return
-      }
-
       const primaNueva = Number(rollForm.primaRecibida || 0)
 
       const primaTotalAnterior = Number(
@@ -472,16 +548,12 @@ function App() {
         estrategia: rollBase.estrategia,
         acciones: rollBase.acciones,
         strike: Number(rollForm.strike || 0),
-
-        // última pata (se ve en la tabla)
         prima_recibida: primaNueva,
-
-        // prima acumulada (se usa para ROI / Prima general)
         prima_total: primaTotalActualizada,
-
         comision: Number(rollForm.comision || 0),
         costo_cierre: Number(rollForm.costoCierre || 0),
         estado: "Roleada",
+        nota: rollBase.nota ?? null,
       }
 
       const { error: updateError } = await supabase
@@ -491,7 +563,19 @@ function App() {
 
       if (updateError) throw updateError
 
+      await registrarEventoHistorial({
+        tipo: "Rolado",
+        ticker: payload.ticker,
+        prima: primaNueva,
+        comision: payload.comision,
+        costoCierre: payload.costo_cierre,
+        strike: payload.strike,
+        estado: payload.estado,
+        nota: payload.nota ?? null,
+      })
+
       await cargarOperaciones()
+      await cargarHistorialState()
       closeRollModal()
     } catch (err: any) {
       console.error(err)
@@ -528,19 +612,35 @@ function App() {
     setErrorMsg(null)
 
     try {
+      const comision = Number(closeForm.comision || 0)
+      const costoCierre = Number(closeForm.costoCierre || 0)
+
       const { error } = await supabase
         .from("operaciones")
         .update({
           fecha_cierre: closeForm.fechaCierre || null,
-          comision: Number(closeForm.comision || 0),
-          costo_cierre: Number(closeForm.costoCierre || 0),
+          comision,
+          costo_cierre: costoCierre,
           estado: "Cerrada",
         })
         .eq("id", closeOp.id)
 
       if (error) throw error
 
+      await registrarEventoHistorial({
+        tipo: "Cierre",
+        ticker: closeOp.ticker,
+        prima:
+          closeOp.primaTotal ?? closeOp.primaRecibida ?? 0,
+        comision,
+        costoCierre,
+        strike: closeOp.strike,
+        estado: "Cerrada",
+        nota: closeOp.nota ?? null,
+      })
+
       await cargarOperaciones()
+      await cargarHistorialState()
       closeCloseModal()
     } catch (err: any) {
       console.error(err)
@@ -610,7 +710,7 @@ function App() {
                   <tr className="border-b bg-slate-50 text-left text-xs uppercase text-slate-500">
                     <th className="px-2 py-2">Ticker</th>
                     <th className="px-2 py-2 text-right">Precio</th>
-                    <th className="px-2 py-2 text-right">Operaciones</th>
+                    <th className="px-2 py-2 text-right">Rolls</th>
                     <th className="px-2 py-2 text-right">Prima</th>
                     <th className="px-2 py-2 text-right">Costos</th>
                     <th className="px-2 py-2 text-right">Neto</th>
@@ -634,7 +734,7 @@ function App() {
                           : "–"}
                       </td>
                       <td className="px-2 py-2 text-right">
-                        {item.operaciones}
+                        {item.operaciones.toFixed(1)}
                       </td>
                       <td className="px-2 py-2 text-right">
                         {item.prima.toFixed(2)}
@@ -713,6 +813,7 @@ function App() {
                     <th className="px-2 py-2 text-right">Costo cierre</th>
                     <th className="px-2 py-2 text-right">Neto</th>
                     <th className="px-2 py-2">Estado</th>
+                    <th className="px-2 py-2">Nota</th>
                     <th className="px-2 py-2 text-right">Acciones</th>
                   </tr>
                 </thead>
@@ -787,9 +888,16 @@ function App() {
                             {op.estado}
                           </span>
                         </td>
+                        <td
+                          className="px-2 py-2 max-w-[220px] truncate"
+                          title={op.nota ?? ""}
+                        >
+                          {op.nota || "—"}
+                        </td>
                         <td className="px-2 py-2 text-right">
                           <div className="flex flex-wrap justify-end gap-2">
                             <button
+                              title="Rolar operación"
                               onClick={() => canRoll && openRoll(op)}
                               className={`rounded-md border px-2 py-1 text-xs ${
                                 canRoll
@@ -798,25 +906,28 @@ function App() {
                               }`}
                               disabled={!canRoll}
                             >
-                              Rolar
+                              R
                             </button>
                             <button
+                              title="Cerrar operación"
                               onClick={() => openCloseModal(op)}
                               className="rounded-md border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
                             >
-                              Cerrar
+                              C
                             </button>
                             <button
+                              title="Editar operación"
                               onClick={() => openEdit(op)}
                               className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
                             >
-                              Editar
+                              E
                             </button>
                             <button
+                              title="Eliminar operación"
                               onClick={() => handleDelete(op.id)}
                               className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                             >
-                              Eliminar
+                              X
                             </button>
                           </div>
                         </td>
@@ -872,13 +983,24 @@ function App() {
                   <label className="text-xs font-medium text-slate-600">
                     Estrategia
                   </label>
-                  <input
+                  <select
                     className="rounded-md border border-slate-300 px-2 py-1 text-sm"
                     value={form.estrategia}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, estrategia: e.target.value }))
                     }
-                  />
+                  >
+                    <option value="">Selecciona una estrategia</option>
+                    <option value="CSP">CSP (Cash Secured Put)</option>
+                    <option value="CC">CC (Covered Call)</option>
+                    <option value="BPS">BPS (Bull Put Spread)</option>
+                    <option value="BCS">BCS (Bull Call Spread)</option>
+                    <option value="IC">IC (Iron Condor)</option>
+                    <option value="PCS">PCS (Put Credit Spread)</option>
+                    <option value="CCS">CCS (Call Credit Spread)</option>
+                    <option value="SC">SC (Short Call)</option>
+                    <option value="SP">SP (Short Put)</option>
+                  </select>
                 </div>
 
                 {/* Fecha inicio */}
@@ -1031,6 +1153,21 @@ function App() {
                     <option value="Roleada">Roleada</option>
                     <option value="Expirada">Expirada</option>
                   </select>
+                </div>
+
+                {/* Nota */}
+                <div className="md:col-span-2 flex flex-col gap-1">
+                  <label className="text-xs font-medium text-slate-600">
+                    Nota
+                  </label>
+                  <textarea
+                    className="min-h-[60px] rounded-md border border-slate-300 px-2 py-1 text-sm"
+                    value={form.nota}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, nota: e.target.value }))
+                    }
+                    placeholder="Ej: Entré por soporte, rolo si toca el strike anterior..."
+                  />
                 </div>
 
                 <div className="col-span-2 mt-2 flex justify-end gap-2">
@@ -1353,6 +1490,9 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* Historial en archivo aparte */}
+        <Historial historial={historial} />
       </main>
     </div>
   )
