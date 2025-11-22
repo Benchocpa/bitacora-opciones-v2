@@ -55,9 +55,13 @@ export async function getStockName(ticker: string): Promise<string | null> {
 
     const data = await res.json()
 
-    // La API devuelve la propiedad "Name" con el nombre de la empresa
-    const name = data?.Name as string | undefined
+    // Si llegamos al límite diario, Alpha Vantage devuelve "Note"
+    if (data?.Note) {
+      console.warn("Alpha Vantage rate limit:", data.Note)
+      return null
+    }
 
+    const name = data?.Name as string | undefined
     return name ?? null
   } catch (err) {
     console.error("Error obteniendo nombre del ticker", ticker, err)
