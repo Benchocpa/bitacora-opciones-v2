@@ -1,4 +1,5 @@
 const API_KEY = import.meta.env.VITE_STOCK_API_KEY
+const BASE_URL = "https://www.alphavantage.co/query"
 
 export async function getStockPrice(rawTicker: string): Promise<number | null> {
   try {
@@ -39,6 +40,27 @@ export async function getStockPrice(rawTicker: string): Promise<number | null> {
     return price
   } catch (error) {
     console.error("Error obteniendo precio:", error)
+    return null
+  }
+}
+
+// ... aquí ya tienes getStockPrice
+
+export async function getStockName(ticker: string): Promise<string | null> {
+  try {
+    const url = `${BASE_URL}?function=OVERVIEW&symbol=${ticker}&apikey=${API_KEY}`
+    const res = await fetch(url)
+
+    if (!res.ok) return null
+
+    const data = await res.json()
+
+    // La API devuelve la propiedad "Name" con el nombre de la empresa
+    const name = data?.Name as string | undefined
+
+    return name ?? null
+  } catch (err) {
+    console.error("Error obteniendo nombre del ticker", ticker, err)
     return null
   }
 }

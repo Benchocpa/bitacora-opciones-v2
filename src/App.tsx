@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { supabase } from "./supabaseClient"
-import { getStockPrice } from "./services/priceService"
+import { getStockPrice, getStockName } from "./services/priceService"
 import {
   ResponsiveContainer,
   BarChart,
@@ -102,6 +102,8 @@ function App() {
   const [isChartOpen, setIsChartOpen] = useState(false)
   const [precios, setPrecios] = useState<Record<string, number | null>>({})
   const [preciosCargados, setPreciosCargados] = useState(false)
+  const [nombres, setNombres] = useState<Record<string, string | null>>({})
+
 
   // Historial
   const [historial, setHistorial] = useState<any[]>([])
@@ -228,18 +230,22 @@ function App() {
   // ======================
 
   async function cargarPrecios() {
-    const tickers = Array.from(
-      new Set(operaciones.map((o) => o.ticker.trim().toUpperCase())),
-    )
+  const tickers = Array.from(
+    new Set(operaciones.map((o) => o.ticker.trim().toUpperCase())),
+  )
 
-    const temp: Record<string, number | null> = {}
+  const tempPrecios: Record<string, number | null> = {}
+  const tempNombres: Record<string, string | null> = {}
 
-    for (const t of tickers) {
-      temp[t] = await getStockPrice(t)
-    }
-
-    setPrecios(temp)
+  for (const t of tickers) {
+    tempPrecios[t] = await getStockPrice(t)
+    tempNombres[t] = await getStockName(t)
   }
+
+  setPrecios(tempPrecios)
+  setNombres(tempNombres)
+}
+
 
   useEffect(() => {
     if (operaciones.length > 0 && !preciosCargados) {
@@ -725,9 +731,20 @@ function App() {
                       key={item.ticker}
                       className="border-b last:border-0 hover:bg-slate-50"
                     >
-                      <td className="px-2 py-2 font-medium">
-                        {item.ticker}
+                      <td
+                        className="px-2 py-2 font-medium"
+                        title={nombres[item.ticker] ?? ""}
+                      >
+                        <div className="flex flex-col">
+                          <span>{item.ticker}</span>
+                          {nombres[item.ticker] && (
+                            <span className="text-[11px] text-slate-500">
+                              {nombres[item.ticker]}
+                            </span>
+                          )}
+                        </div>
                       </td>
+
                       <td className="px-2 py-2 text-right">
                         {precios[item.ticker] != null
                           ? precios[item.ticker]!.toFixed(2)
