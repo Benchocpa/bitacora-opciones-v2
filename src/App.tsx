@@ -103,6 +103,10 @@ function App() {
   const [precios, setPrecios] = useState<Record<string, number | null>>({})
   const [preciosCargados, setPreciosCargados] = useState(false)
   const [nombres, setNombres] = useState<Record<string, string | null>>({})
+  const [tickerName, setTickerName] = useState<string | null>(null)
+  const [tickerNameLoading, setTickerNameLoading] = useState(false)
+  const [tickerNameError, setTickerNameError] = useState<string | null>(null)
+
 
 
   // Historial
@@ -502,6 +506,31 @@ function App() {
       setLoading(false)
     }
   }
+  async function handleTickerBlur() {
+  const symbol = form.ticker.trim().toUpperCase()
+  if (!symbol) return
+
+  setTickerNameLoading(true)
+  setTickerName(null)
+  setTickerNameError(null)
+
+  try {
+    const name = await getStockName(symbol)
+
+    if (name) {
+      setTickerName(name)
+    } else {
+      setTickerNameError(
+        "No se encontró el nombre o se alcanzó el límite diario del API."
+      )
+    }
+  } catch (err) {
+    console.error(err)
+    setTickerNameError("Error buscando el nombre del ticker.")
+  } finally {
+    setTickerNameLoading(false)
+  }
+}
 
   // ======================
   // ROLAR OPERACIÓN
@@ -978,22 +1007,43 @@ function App() {
                 onSubmit={handleSubmit}
               >
                 {/* Ticker */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs font-medium text-slate-600">
-                    Ticker
-                  </label>
-                  <input
-                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                    value={form.ticker}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        ticker: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    required
-                  />
-                </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-600">
+                  Ticker
+                </label>
+                <input
+                  className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                  value={form.ticker}
+                  onChange={(e) => {
+                    const value = e.target.value.toUpperCase()
+                    setForm((f) => ({ ...f, ticker: value }))
+                    // cada vez que cambias el ticker, reseteamos el nombre
+                    setTickerName(null)
+                    setTickerNameError(null)
+                  }}
+                  onBlur={handleTickerBlur}   // 👈 aquí disparamos la búsqueda del nombre
+                  required
+                />
+
+                {tickerNameLoading && (
+                  <span className="text-[11px] text-slate-500">
+                    Buscando nombre del ticker...
+                  </span>
+                )}
+
+                {tickerName && !tickerNameLoading && (
+                  <span className="text-[11px] text-slate-600">
+                    {tickerName}
+                  </span>
+                )}
+
+                {tickerNameError && (
+                  <span className="text-[11px] text-red-500">
+                    {tickerNameError}
+                  </span>
+                )}
+              </div>
+
 
                 {/* Estrategia */}
                 <div className="flex flex-col gap-1">
